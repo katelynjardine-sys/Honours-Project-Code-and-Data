@@ -1,0 +1,330 @@
+# %% [markdown]
+# This code is for taking HWS data and stitching it together to create a panorama. 
+# You will need:
+# 
+# - either two or three sets of gradients which you want to stitch together
+# 
+# - the translation (mm) of each set of gradients. Only the difference in translation is important. 
+# 
+# Make sure all the HWS parameters are correct for the system you are using!
+
+# %%
+#Import ximea (camera software)
+import sys
+
+#import useful things
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import os
+
+# Import HS classes assuming they reside one directory above
+hspath = os.path.abspath('..')
+if hspath not in sys.path:
+    sys.path.append(hspath)
+
+# use the location where you have saved the HWS modules on your own computer
+sys.path.append('C:/Users/katel/Documents/honours_project')
+
+from HS_Image import *
+from HWS.HS_Centroids import *
+from HWS.HS_Gradients import *
+from HWS.HS_WFP import *
+import HWS.HSM_WFN as HSM_WFN
+
+# %%
+# size of image taken by HWS (pixels)
+img_size = 2048
+# distance from CCD array to Heartmann plate
+lever_arm = 8.73e-3 # (m)
+# magnification due to imaging telescope
+magnification = 0.509
+# pixel size in CCD array
+pixel_size = 5.5e-6
+# wavelength of SLD light (m)
+wavelength = 830e-9
+# distance between holes on the Heartmann plate
+hole_spacing = 4e-4 # (m)
+# origin
+origin = 2047/2
+
+# location of this file, where images save to
+file_path = os.getcwd()
+
+# how many measurements were taken actoss the radius of the optic?
+# options are 'two' or 'three' 
+mode = 'two'
+
+# %% [markdown]
+# # data 
+
+# %% [markdown]
+# ring heater 5V, 15 min
+
+# %%
+# grads_1 = np.load(os.path.join(file_path, os.path.join('ring_heater_22_09_t=1149', f'gradients.npy')))
+# grads_2 = np.load(os.path.join(file_path, os.path.join('ring_heater_22_09_t=0500', f'gradients.npy')))
+# grads_3 = np.load(os.path.join(file_path, os.path.join('ring_heater_23_09_t=0251', f'gradients.npy')))
+
+# %% [markdown]
+# background, 15 min
+
+# %%
+# grads_1 = np.load(os.path.join(file_path, os.path.join('ring_heater_25_09_t=1149', f'gradients.npy')))
+# grads_2 = np.load(os.path.join(file_path, os.path.join('ring_heater_24_09_t=0500', f'gradients.npy')))
+# grads_3 = np.load(os.path.join(file_path, os.path.join('ring_heater_24_09_t=0251', f'gradients.npy')))
+
+# %% [markdown]
+# ring heater 7V, 15 minutes
+
+# %%
+grads_1 = np.load(os.path.join(file_path, os.path.join('ring_heater_13_10_t=1149', f'gradients.npy')))
+grads_2 = np.load(os.path.join(file_path, os.path.join('ring_heater_13_10_t=0265', f'gradients.npy')))
+
+# %%
+# translation location of each image
+if mode == 'two':
+    translations = np.array([11.49, 2.65]) * 1e-3 # m
+    loc_1 = int(0)
+    loc_2 = (translations[0] - translations[1])
+elif mode == 'three':
+    translations = np.array([11.49, 5.00, 2.51]) * 1e-3 # m
+    loc_1 = int(0)
+    loc_2 = (translations[0] - translations[1])
+    loc_3 = (translations[0] - translations[2])
+else:
+    print('bleurg! bleaurghh! not a mode!')
+
+# %%
+# shift gradients by translation
+grads_1_shifted = np.copy(grads_1)
+grads_1_shifted[:, 2] = grads_1[:, 2] + loc_1 # shift x location
+grads_1_shifted[:, 0] = grads_1[:, 0] + loc_1 # shift x values
+
+grads_2_shifted = np.copy(grads_2)
+grads_2_shifted[:, 2] = grads_2[:, 2] + loc_2 # shift x location
+grads_2_shifted[:, 0] = grads_2[:, 0] + loc_2 # shift x values
+
+if mode == 'three':
+    grads_3_shifted = np.copy(grads_3)
+    grads_3_shifted[:, 2] = grads_3[:, 2] + loc_3 # shift x location
+    grads_3_shifted[:, 0] = grads_3[:, 0] + loc_3 # shift x values
+
+# remove prism from shifted gradients with numerical method
+prism_x_1 = np.mean(grads_1_shifted[:, 0])
+prism_y_1 = np.mean(grads_1_shifted[:, 1])
+no_prism_1 = grads_1_shifted
+no_prism_1[:, 0] = no_prism_1[:, 0] - prism_x_1
+no_prism_1[:, 1] = no_prism_1[:, 1] - prism_y_1
+
+prism_x_2 = np.mean(grads_2_shifted[:, 0])
+prism_y_2 = np.mean(grads_2_shifted[:, 1])
+no_prism_2 = grads_2_shifted
+no_prism_2[:, 0] = no_prism_2[:, 0] - prism_x_2
+no_prism_2[:, 1] = no_prism_2[:, 1] - prism_y_2
+
+if mode == 'three':
+    prism_x_3 = np.mean(grads_3_shifted[:, 0])
+    prism_y_3 = np.mean(grads_3_shifted[:, 1])
+    no_prism_3 = grads_3_shifted
+    no_prism_3[:, 0] = no_prism_3[:, 0] - prism_x_3
+    no_prism_3[:, 1] = no_prism_3[:, 1] - prism_y_3
+
+# %%
+# plot each set of quivers in a different colour to see how they overlap
+plt.quiver(no_prism_1[:,2], no_prism_1[:,3], no_prism_1[:,0], no_prism_1[:,1], color = 'red')
+plt.quiver(no_prism_2[:,2], no_prism_2[:,3], no_prism_2[:,0], no_prism_2[:,1], color = 'blue')
+if mode == 'three':
+    plt.quiver(no_prism_3[:,2], no_prism_3[:,3], no_prism_3[:,0], no_prism_3[:,1], color = 'goldenrod')
+plt.show()
+
+# %%
+# combine all gradients into one array
+if mode == 'three':
+    all_grads_x_position = np.append(grads_1[:, 2], np.append(no_prism_2[:, 2], no_prism_3[:, 2]))
+    all_grads_y_position = np.append(grads_1[:, 3], np.append(no_prism_2[:, 3], no_prism_3[:, 3]))
+    all_grads_x_value = np.append(grads_1[:, 0], np.append(no_prism_2[:, 0], no_prism_3[:, 0]))
+    all_grads_y_value = np.append(grads_1[:, 1], np.append(no_prism_2[:, 1], no_prism_3[:, 1]))
+elif mode == 'two':
+    all_grads_x_position = np.append(no_prism_1[:, 2], no_prism_2[:, 2])
+    all_grads_y_position = np.append(no_prism_1[:, 3], no_prism_2[:, 3])
+    all_grads_x_value = np.append(no_prism_1[:, 0], no_prism_2[:, 0])
+    all_grads_y_value = np.append(no_prism_1[:, 1], no_prism_2[:, 1])
+else:
+    print('no.')
+
+all_grads = np.array([all_grads_x_value, all_grads_y_value, all_grads_x_position, all_grads_y_position]).T
+print(np.shape(all_grads))
+
+plt.quiver(all_grads[:,2], all_grads[:,3], all_grads[:,0], all_grads[:,1])
+
+plt.gca().set_aspect('equal')
+plt.show()
+
+# %%
+# calculate the wavefront of the combined array
+hsg = HS_Gradients()
+hsg.origin = array([origin, origin])
+hsg.pixel_size = pixel_size
+hsg.magnification = magnification
+hsg.gradients = all_grads
+
+wf_noprism_inv = HSM_WFN.calculate_wf_from_hsgradients(hsg, to_interpolate = False)
+wf_noprism = -wf_noprism_inv
+
+# %%
+# format axes
+gspacing = 4 * hsg.pixel_size
+
+limits = {}
+limits["x"] = array(
+     [hsg.gradients[:,2].min() - gspacing, hsg.gradients[:,2].max() + gspacing]
+)
+
+limits["y"] = array(
+    [hsg.gradients[:,3].min() - gspacing, hsg.gradients[:,3].max() + gspacing]
+)
+
+xaxis = np.arange(limits["x"][0], limits["x"][1], gspacing) * 1e3
+yaxis = np.arange(limits["y"][0], limits["y"][1], gspacing) * 1e3
+
+plt.subplots(1, 1, figsize = (6.5, 4), layout = 'constrained')
+plt.subplot(1, 1, 1)
+plt.contourf(xaxis, yaxis, wf_noprism, cmap = 'magma', levels = 30)
+plt.xlabel('mm')
+plt.ylabel('mm')
+
+# format colourbar
+func = lambda x,pos: "{:g}".format(x*1e9)
+fmt = matplotlib.ticker.FuncFormatter(func)
+cbar1 = plt.colorbar(format=fmt)
+cbar1.set_label('wavefront deformation (nm)')
+
+plt.title('Ring Heater Thermal Deformation')
+plt.gca().set_aspect('equal')
+plt.show()
+
+# zero on the x axis denotes the centre of the optic
+
+# %% [markdown]
+# ## no overlapping gradients
+
+# %%
+grads_1_copy = np.copy(grads_1_shifted)
+grads_2_copy = np.copy(grads_2_shifted)
+if mode =='three':
+    grads_3_copy = np.copy(grads_3)
+
+
+# %%
+# set where the gradients will be cut and stitched
+break_1 = np.min(grads_2_shifted[:, 2])
+if mode =='three':
+    break_2 = np.max(grads_1_shifted[:, 2])
+
+# %%
+# format axes
+gspacing = 4 * hsg.pixel_size
+
+limits = {}
+limits["x"] = array(
+     [hsg.gradients[:,2].min() - gspacing, hsg.gradients[:,2].max() + gspacing]
+)
+
+limits["y"] = array(
+    [hsg.gradients[:,3].min() - gspacing, hsg.gradients[:,3].max() + gspacing]
+)
+
+xaxis = np.arange(limits["x"][0], limits["x"][1], gspacing) * 1e3
+yaxis = np.arange(limits["y"][0], limits["y"][1], gspacing) * 1e3
+
+# %%
+plt.quiver(all_grads[:,2], all_grads[:,3], all_grads[:,0], all_grads[:,1])
+plt.xlabel('m')
+plt.ylabel('m')
+
+plt.vlines(break_1, -0.011, 0.011, color = 'red')
+if mode =='three':
+    plt.vlines(break_2, -0.011, 0.011, color = 'red')
+
+plt.xlim([limits["x"][0], limits["x"][1]])
+plt.ylim([limits["y"][0], limits["y"][1]])
+
+plt.gca().set_aspect('equal')
+plt.show()
+
+# %%
+# get rid of overlapping gradients
+if mode == 'two':
+    grads_1_trimmed = np.delete(grads_1_copy, np.where(grads_1_shifted[:,2] > break_1)[0], 0)
+    grads_2_trimmed = np.delete(grads_2_copy, np.where(grads_2_shifted[:,2] < break_1)[0], 0)
+elif mode == 'three':
+    grads_1_trimmed = np.delete(grads_1_copy, np.where(grads_1_shifted[:,2] > break_1)[0], 0)
+    grads_2_trimmed = np.delete(grads_2_copy, np.where(grads_2_shifted[:,2] < break_2)[0], 0)
+    grads_3_trimmed = np.delete(grads_3_copy, np.where(grads_3[:,2] > break_2)[0], 0)
+
+
+# %%
+# combine the gradients into one array
+if mode == 'three':
+    all_grads_x_position_t = np.append(grads_3_trimmed[:, 2], np.append(grads_2_trimmed[:, 2], grads_1_trimmed[:, 2]))
+    all_grads_y_position_t = np.append(grads_3_trimmed[:, 3], np.append(grads_2_trimmed[:, 3], grads_1_trimmed[:, 3]))
+    all_grads_x_value_t = np.append(grads_3_trimmed[:, 0], np.append(grads_2_trimmed[:, 0], grads_1_trimmed[:, 0]))
+    all_grads_y_value_t = np.append(grads_3_trimmed[:, 1], np.append(grads_2_trimmed[:, 1], grads_1_trimmed[:, 1]))
+elif mode == 'two':
+    all_grads_x_position_t = np.append(grads_2_trimmed[:, 2], grads_1_trimmed[:, 2])
+    all_grads_y_position_t = np.append(grads_2_trimmed[:, 3], grads_1_trimmed[:, 3])
+    all_grads_x_value_t = np.append(grads_2_trimmed[:, 0], grads_1_trimmed[:, 0])
+    all_grads_y_value_t = np.append(grads_2_trimmed[:, 1], grads_1_trimmed[:, 1])
+all_grads_t = np.array([all_grads_x_value_t, all_grads_y_value_t, all_grads_x_position_t, all_grads_y_position_t]).T
+
+plt.quiver(all_grads_t[:,2], all_grads_t[:,3], all_grads_t[:,0], all_grads_t[:,1])
+plt.xlabel('m')
+plt.ylabel('m')
+plt.gca().set_aspect('equal')
+plt.show()
+
+# %%
+# calculate the wavefront
+hsg = HS_Gradients()
+hsg.origin = array([origin, origin])
+hsg.pixel_size = pixel_size
+hsg.magnification = magnification
+hsg.gradients = all_grads_t
+
+wf_noprism_inv = HSM_WFN.calculate_wf_from_hsgradients(hsg, to_interpolate = False)
+wf_noprism = -wf_noprism_inv
+
+# %%
+# format axes
+gspacing = 4 * hsg.pixel_size
+
+limits = {}
+limits["x"] = array(
+     [hsg.gradients[:,2].min() - gspacing, hsg.gradients[:,2].max() + gspacing]
+)
+
+limits["y"] = array(
+    [hsg.gradients[:,3].min() - gspacing, hsg.gradients[:,3].max() + gspacing]
+)
+
+xaxis = np.arange(limits["x"][0], limits["x"][1], gspacing) * 1e3
+yaxis = np.arange(limits["y"][0], limits["y"][1], gspacing) * 1e3
+
+plt.subplots(1, 1, figsize = (6.5, 4), layout = 'constrained')
+plt.subplot(1, 1, 1)
+plt.contourf(xaxis, yaxis, wf_noprism, cmap = 'magma', levels = 30)
+plt.xlabel('mm')
+plt.ylabel('mm')
+
+# format colourbar
+func = lambda x,pos: "{:g}".format(x*1e9)
+fmt = matplotlib.ticker.FuncFormatter(func)
+cbar1 = plt.colorbar(format=fmt)
+cbar1.set_label('wavefront deformation (nm)')
+
+plt.title('Ring Heater Thermal Deformation')
+plt.gca().set_aspect('equal')
+
+plt.show()
